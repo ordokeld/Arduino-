@@ -8,9 +8,10 @@
 #include <time.h>                               // Knihovna pro práci s časem
 #include <Wire.h>                               // Knihovna pro komunikaci přes I2C
 #include <LiquidCrystal_I2C.h>                  // Knihovna pro práci s I2C LCD displeji
-#include <ArduinoOTA.h>                         // Knihovna pro OTA (Over-the-Air) aktualizace
-#include <ESP8266mDNS.h>                        // Knihovna pro podporu mDNS (multicast DNS)
 #include <map>                                  // Knihovna pro použití datové struktury map
+#include <LittleFS.h>
+#include <FTPClient.h>
+#include <FTPServer.h>
 
 const int RST_PIN = D3;                         // Definice RST pinu pro RFID
 const int SS_PIN = D4;                          // Definice SS pinu pro RFID
@@ -21,12 +22,26 @@ NTPClient timeClient(ntpUDP);                   // Vytvoření instance NTP klie
 
 LiquidCrystal_I2C lcd(0x27, 16, 2);             // Inicializace LCD displeje s I2C adresou 0x27
 
+const char* ftp_server = "192.168.0.31"; // Your computer's IP address
+const char* ftp_username = "esp8266"; // FTP server username
+const char* ftp_password = "123"; // FTP server password
+const int ftp_port = 21; // FTP server port, usually 21 if not changed
+
+// Declaring ftpClient in global scope
+FTPClient ftpClient(LittleFS);
+FTPClient::ServerInfo ftpServerInfo(ftp_username, ftp_password, ftp_server, ftp_port);
+
 int nextIdNo = 1;                               // Proměnná pro sledování dalšího ID registrace
 void handleRoot();                              // Deklarace funkce handleRoot
 void handleExportCSV();                         // Deklarace funkce handleExportCSV
 void addRegistration(String cardID);            // Deklarace funkce pro přidání registrace
 
 bool htmlSizePrinted = false;                   // Příznak pro sledování, zda byla velikost HTML kódu vypsána
+
+// Global variables
+unsigned long startTime;
+bool transferStarted;
+String html; 
 
 // Struktura pro ukládání informací o registraci karet
 struct CardRegistration {
@@ -37,6 +52,7 @@ struct CardRegistration {
   String date;
   String timeIn;
   String timeOut;
+  bool lastScanWasExit; // New field to track last event
 };
 
 std::map<String, String> cardToNameMap;         // Mapa pro mapování ID karet na jména
@@ -62,7 +78,6 @@ String getFormattedTime() {
 
 void handleExportCSV() {
   String csv = "ID No;Name;Card ID;Department;Date;Time In;Time Out\n"; // Inicializace CSV řetězce s hlavičkami
-
   for (const auto& reg : registrations) {
     csv += reg.idNo + ";";                      // Přidání ID do CSV řetězce
     csv += reg.name + ";";                      // Přidání jména do CSV řetězce
@@ -72,36 +87,131 @@ void handleExportCSV() {
     csv += reg.timeIn + ";";                    // Přidání času příchodu do CSV řetězce
     csv += reg.timeOut + "\n";                  // Přidání času odchodu a nového řádku pro každý záznam
   }
-
   server.send(200, "text/csv", csv);            // Odeslání CSV řetězce jako HTTP odpovědi
 }
 
-void connectToWiFi() {
+void connectToWiFiAndStartServer() {
   WiFiManager wifiManager;                      // Vytvoření instance WiFiManager
-  //wifiManager.resetSettings();               // Resetování nastavení WiFi (zakomentováno)
-  wifiManager.autoConnect("AutoConnectAP");     // Automatické připojení k WiFi
-  Serial.println("Connected to WiFi network");  // Výpis stavu připojení na sériovou linku
-  timeClient.begin();                           // Spuštění NTP klienta
+   //wifiManager.resetSettings();               // Resetování nastavení WiFi (zakomentováno)
+  
+if (!wifiManager.autoConnect("AutoConnectAP")) {
+    Serial.println("Failed to connect to WiFi. Entering Access Point mode.");
+    // Setup AP mode
+    WiFi.softAP("ESP8266-AP", "password");
+    Serial.print("AP IP address: ");
+    Serial.println(WiFi.softAPIP());
+  } else {
+    Serial.println("Connected to WiFi network!");
+    // Setup regular mode
+    WiFi.begin(); 
+  }
+}
+
+// This function declaration suggests that there is a function that saves HTML content to a file, probably on the ESP8266's filesystem.
+// The function takes a string containing HTML and returns a boolean value indicating success or failure of the operation.
+bool saveHTMLToFile(const String& htmlContent);
+
+// This function declaration suggests that there is a function that handles the exporting of a file to an FTP server.
+bool exportHTMLtoFTP();
+
+// This function is a route handler for a web server request that likely initiates an export process. When this route is accessed, it sends a response with a status code of 200 (OK) and a plain text message "Export started".
+void handleExportRequest() {
+    server.send(200, "text/plain", "Export started"); // Respond with a plain text message
 }
 
 void setup() {
   Serial.begin(115200);                         // Inicializace sériové komunikace s rychlostí 115200 baud
+  delay(500);
+    ftpClient.begin(ftpServerInfo);
+
+    Serial.println(F("Inizializing FS..."));
+  if (LittleFS.begin()) {
+    Serial.println(F("done."));
+} else {
+    Serial.println(F("fail."));
+}
+  // Get all information of your LittleFS
+    FSInfo fs_info;
+    LittleFS.info(fs_info);
+ 
+    Serial.println("File sistem info.");
+ 
+    Serial.print("Total space:      ");
+    Serial.print(fs_info.totalBytes);
+    Serial.println("byte");
+ 
+    Serial.print("Total space used: ");
+    Serial.print(fs_info.usedBytes);
+    Serial.println("byte");
+ 
+    Serial.print("Block size:       ");
+    Serial.print(fs_info.blockSize);
+    Serial.println("byte");
+ 
+    Serial.print("Page size:        ");
+    Serial.print(fs_info.totalBytes);
+    Serial.println("byte");
+ 
+    Serial.print("Max open files:   ");
+    Serial.println(fs_info.maxOpenFiles);
+ 
+    Serial.print("Max path lenght:  ");
+    Serial.println(fs_info.maxPathLength);
+ 
+    Serial.println();
+ 
+    // Open dir folder
+    Dir dir = LittleFS.openDir("/");
+    // Cycle all the content
+    while (dir.next()) {
+        // get filename
+        Serial.print(dir.fileName());
+        Serial.print(" - ");
+        // If element have a size display It else write 0
+        if(dir.fileSize()) {
+            File f = dir.openFile("r");
+            Serial.println(f.size());
+            f.close();
+        }else{
+            Serial.println("0");
+        }
+    }
+
+  File file = LittleFS.open("/export.html", "r");
+  if (!file) {
+    Serial.println("Failed to open file export.html");
+    return;
+  }
+
+  Serial.println("File contents export.html:");
+  while (file.available()) {
+    Serial.write(file.read());
+  }
+  file.close();
+
+  delay(5000);
+
   SPI.begin();                                  // Inicializace SPI komunikace
   mfrc522.PCD_Init();                           // Inicializace RFID čtečky
   lcd.init();                                   // Inicializace LCD displeje
   lcd.backlight();                              // Zapnutí podsvícení LCD
   
-  connectToWiFi();                              // Připojení k WiFi síti
+  connectToWiFiAndStartServer();                              // Připojení k WiFi síti
 
-  configTime(3 * 3600, 0, "pool.ntp.org", "time.nist.gov"); // Nastavení časové zóny a NTP serverů
+  configTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org", "time.nist.gov"); // Nastavení časové zóny a NTP serverů
   while (!timeClient.update()) {
     timeClient.forceUpdate();                   // Vynucení aktualizace času, pokud není dosaženo
     delay(100);                                 // Krátké zpoždění mezi pokusy
   }
 
-  if (MDNS.begin("esp8266")) {                  // Spuštění mDNS s hostname "esp8266"
-    Serial.println("MDNS responder started");   // Výpis o spuštění mDNS na sériovou linku
-  }
+ // Set up your server routes
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/export.csv", HTTP_GET, handleExportCSV);
+  server.on("/export", HTTP_GET, handleExport); // Ensure handleExport is defined before setup()
+
+  // Start the server
+  server.begin();
+  Serial.println("HTTP server started.");
 
   server.on("/set-name", HTTP_GET, []() {       // Nastavení HTTP GET endpointu "/set-name"
     String cardID = server.arg("cardID");       // Získání parametru cardID z HTTP požadavku
@@ -109,45 +219,7 @@ void setup() {
     setCardName(cardID, userName);              // Nastavení jména pro dané ID karty
     server.send(200, "text/plain", "Name set for card ID: " + cardID); // Odpověď serveru
   });
-
-  ArduinoOTA.onStart([]() {
-    String type;
-    if (ArduinoOTA.getCommand() == U_FLASH) {
-      type = "sketch";       // Aktualizace kódu
-    } else { // U_SPIFFS
-      type = "filesystem";   // Aktualizace souborového systému (SPIFFS)
-    }
-    // Poznámka: při aktualizaci SPIFFS by zde bylo místo pro odpojení SPIFFS pomocí SPIFFS.end()
-    Serial.println("Start updating " + type);   // Výpis typu aktualizace na sériovou linku
-  });
-  ArduinoOTA.onEnd([]() {
-    Serial.println("\nEnd");     // Výpis o ukončení aktualizace
-  });
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));   // Výpis průběhu aktualizace
-  });
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);   // Výpis chyby, pokud nastane
-    if (error == OTA_AUTH_ERROR) {
-      Serial.println("Auth Failed");    // Chyba autentizace
-    } else if (error == OTA_BEGIN_ERROR) {
-      Serial.println("Begin Failed");   // Chyba při zahájení aktualizace
-    } else if (error == OTA_CONNECT_ERROR) {
-      Serial.println("Connect Failed");    // Chyba připojení
-    } else if (error == OTA_RECEIVE_ERROR) {
-      Serial.println("Receive Failed");   // Chyba při příjmu dat
-    } else if (error == OTA_END_ERROR) {
-      Serial.println("End Failed");       // Chyba při ukončení aktualizace
-    }
-  });
-
-  ArduinoOTA.begin();                           // Zahájení OTA služby
-
  Serial.println("Time synchronized");           // Výpis o synchronizaci času
-server.on("/", handleRoot);                    // Nastavení handleru pro kořenovou cestu
-server.on("/export.csv", handleExportCSV);     // Nastavení handleru pro export CSV
-server.begin();                                // Spuštění webového serveru
-Serial.println("HTTP server started");         // Výpis o spuštění webového serveru
 }
 
 void setCardName(String cardID, String userName) {
@@ -178,27 +250,34 @@ void addRegistration(String cardID) {
     lcd.print("Card ID: " + cardID);           // Výpis ID karty na LCD
   }
 
- bool cardExists = false;
+bool cardExists = false;
 for (auto& reg : registrations) {
-  if (reg.cardID.equalsIgnoreCase(cardID)) {
-    reg.timeOut = currentTime; // Nastavení času odchodu, pokud karta existuje
-    if (cardToNameMap.find(cardID) != cardToNameMap.end()) {
-      reg.name = cardToNameMap[cardID]; // Aktualizace jména, pokud je v mapě
+if (reg.cardID.equals(cardID))  {
+      if (reg.lastScanWasExit) {
+   // If the last scan was an exit, update the entry time.
+         reg.timeIn = currentTime;
+         reg.lastScanWasExit = false; // Set the last event flag as input
+       } else {
+         // If the last scan was an input, update the output time.
+         reg.timeOut = currentTime;
+         reg.lastScanWasExit = true; // Set the last event flag as output
+      }
+      cardExists = true;
+      break;
     }
-    cardExists = true;
-    break;
   }
-}
 
+// If the card has not been scanned before, create a new registration.
   if (!cardExists) {
     CardRegistration newRegistration = {
-      String(nextIdNo++),
-      name,
-      cardID,
-      department,
-      currentDate,
-      currentTime,
-      ""
+      String(nextIdNo++), // idNo
+      name,               // name
+      cardID,             // cardID
+      department,         // department
+      currentDate,        // date
+      currentTime,        // timeIn
+      "",                 // timeOut
+      false               // lastScanWasExit
     };
     registrations.push_back(newRegistration);
   }
@@ -218,6 +297,7 @@ html += "<style>";
   html += "<ul>";
   html += "<li><a href='/'>Home</a></li>";
   html += "<li><a href='/export.csv'>Export </a></li>";
+  html += "<li><a href='/export'>Export HTML to FTP</a></li>";
  
   html += "</ul>";
   html += "<meta http-equiv='refresh' content='5'></head><body>"; // Aktualizace každých 5 sekund
@@ -243,8 +323,12 @@ if (!htmlSizePrinted) {                                // Kontrola, zda již byl
     Serial.println(html.length());                     // Výpis délky HTML kódu
     htmlSizePrinted = true;                            // Nastavení příznaku, aby se velikost již nevypisovala
 }
-server.send(200, "text/html", html);                   // Odeslání HTML kódu klientovi
-
+     if (saveHTMLToFile(html)) {
+    // Handle successful save
+  } else {
+    // Handle save error
+  }
+  server.send(200, "text/html", html);                   // Odeslání HTML kódu klientovi
 }
 
 String readRFID() {
@@ -261,15 +345,157 @@ String readRFID() {
     return content;                                    // Vrácení obsahu RFID karty
 }
 
-void loop() {
-    ArduinoOTA.handle();                               // Zpracování OTA aktualizací
+void listDir(String indent, String path) {
+    Dir dir = LittleFS.openDir(path); // Open the directory at the given path
+    while (dir.next()) { // While there are files or directories in the current directory
+        File entry = dir.openFile("r"); // Open the current file or directory
+        if (entry.isDirectory()) { // Check if it's a directory
+            Serial.println(indent + "  Dir: " + dir.fileName()); // Print directory name
+            listDir(indent + "  ", path + dir.fileName() + "/"); // Recursively list contents
+        } else {
+            // It's a file, print its name and size
+            Serial.println(indent + "File: " + dir.fileName() + "\tSize: " + String(entry.size()));
+        }
+        entry.close(); // Close the file to free up resources
+    }
+}
+
+void formatFS() {
+    Serial.println("Formatting LittleFS..."); // Inform the user that formatting is starting
+    LittleFS.format(); // Execute the format command
+    Serial.println("Format completed."); // Inform the user that formatting is completed
+}
+
+void getFileFromFTP(String fileName) {
+    Serial.println("Starting to download a file from FTP: " + fileName); // Inform the user
+    // Attempt to start the file transfer from the FTP server to the local path
+    FTPClient::Status status = ftpClient.transfer(fileName, "/local/path/" + fileName, FTPClient::FTP_GET_NONBLOCKING);
+    if (status.result == FTPClient::OK) {
+        // If the transfer initiation was successful, inform the user
+        Serial.println("File download initiated.");
+    } else {
+        // If there was an error, print the error description
+        Serial.println("Error initiating file download: " + status.desc);
+    }
+}
+
+void startFTPUpload(const String& localFile, const String& remoteFile) {
+   Serial.printf("Starting uploading file %s to FTP...\n", localFile.c_str());
+     FTPClient::Status status = ftpClient.transfer(localFile, remoteFile, FTPClient::FTP_PUT_NONBLOCKING);
+   if (status.result == FTPClient::OK) {
+     Serial.println("File transfer initiated.");
+     transferStarted = true; // Set this flag to true to indicate transfer has started
+   } else {
+     Serial.printf("Error initiating file transfer: %s\n", status.desc.c_str());
+     transferStarted = false; // Set or reset this flag as appropriate
+   }
+}
+
+ void loop(){
     server.handleClient();                             // Zpracování příchozích HTTP požadavků
+    ftpClient.handleFTP();
     static unsigned long lastRFIDCheck = 0;            // Statická proměnná pro sledování času poslední kontroly RFID
+    if (Serial.available() > 0) {
+        String command = Serial.readStringUntil('\n');
+        command.trim(); // Remove any whitespace or newline characters
+        if (command == "L") {
+            // List the contents of the file system
+            listDir("", "/");
+        } else if (command == "F") {
+            // Format the file system
+            formatFS();
+        } else if (command.startsWith("G ")) {
+            // Get a file from the FTP server
+            String fileName = command.substring(2); // Extract filename
+            getFileFromFTP(fileName);
+        }
+          }
+        if (transferStarted) {                         // Check file transfer status if transfer has been initiated
+     FTPClient::Status status = ftpClient.check();
+     if (status.result == FTPClient::OK) {
+       Serial.println("File transfer completed successfully.");
+       transferStarted = false; // Reset the transmission start flag
+     } else if (status.result == FTPClient::ERROR) {
+       Serial.printf("File transfer error: %s\n", status.desc.c_str());
+       transferStarted = false; // Reset the transmission start flag
+    }
+  }
     if (millis() - lastRFIDCheck > 5000) {             // Kontrola, zda uplynulo více než 5 sekund od poslední kontroly
         String cardID = readRFID();                    // Čtení RFID karty
         if (!cardID.isEmpty()) {                       // Kontrola, zda byla karta přečtena
             addRegistration(cardID);                   // Přidání registrace karty, pokud byla přečtena
-        }
+                    }
         lastRFIDCheck = millis();                      // Aktualizace času poslední kontroly RFID
     }
 }
+
+// This function tries to save a given HTML content string to a file.
+// It returns true if successful, or false if it fails.
+bool saveHTMLToFile(const String& htmlContent) {
+    Serial.println("Saving HTML to file...");  // Indicate the start of the save operation in the serial output for debugging.
+     File file = LittleFS.open("/export.html", "w");   // Try to open (or create if it doesn't exist) a file named "/export.html" for writing.
+
+  if (!file) {       // Check if the file was successfully opened.
+       Serial.println("Failed to open file for writing");    // If the file couldn't be opened, print an error message to the serial output.
+    return false;      // Return false to indicate failure.
+  }
+  if (file.print(htmlContent)) {        // Write the HTML content to the file.
+    Serial.println("File was written");      // If writing was successful, print a confirmation message.
+    file.close();       // Close the file to ensure data is written to the filesystem.
+    return true;        // Return true to indicate success
+  } else {
+    Serial.println("File write failed");   // If writing failed, print an error message.
+    file.close();      // Close the file to release the created object.
+    return false;     // Return false to indicate failure.
+  }
+}
+
+bool exportHTMLtoFTP() {
+  Serial.println("Starting FTP transfer...");
+  ftpClient.transfer("/export.html", "/remote/path/export.html", FTPClient::FTP_PUT_NONBLOCKING); // Start the FTP transfer
+  uint32_t startTime = millis();        // Check the status of the FTP transfer
+  while (true) {
+    ftpClient.handleFTP();  // Regularly call handleFTP
+    FTPClient::Status status = ftpClient.check();
+        // Check for FTP transfer status
+    if (status.result == FTPClient::OK || status.result == FTPClient::ERROR) {
+      Serial.print("FTP Response Code: ");
+      Serial.println(status.code);
+      Serial.print("FTP Response Description: ");
+      Serial.println(status.desc);
+      
+      if (status.result == FTPClient::OK) {
+        Serial.println("FTP Transfer complete.");
+        return true;
+      } else {
+        Serial.println("FTP Transfer failed.");
+        return false;
+      }
+    }
+    if (millis() - startTime > 30000) { // Timeout after 30 seconds
+      Serial.println("FTP transfer timeout.");
+      return false;
+    }
+    delay(100); // Small delay to prevent blocking the loop
+  }
+}
+
+void handleExport() {
+bool saved = saveHTMLToFile(html);
+  bool exported = false;
+  
+  if (saved) {
+    exported = exportHTMLtoFTP(); // Attempt to export the file to FTP
+  }
+  // Send response based on whether the export was successful
+  if (exported) {
+    server.send(200, "text/plain", "Export to FTP successful.");
+      Serial.println("Export to FTP successful.");
+  } else {
+    server.send(500, "text/plain", "Export to FTP failed.");
+     Serial.println("Export to FTP failed.");
+  }
+}
+    
+
+
