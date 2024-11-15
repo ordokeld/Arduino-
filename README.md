@@ -1,4 +1,6 @@
 # Arduino
+
+
 Arduino HTML RFID attendance
 
 
@@ -12,10 +14,11 @@ en
 
 The aim of this bachelor's thesis is to create an advanced device for visitor identification that enables reading codes from cards, communication with the server, and remote data management. This is particularly important for places with a high frequency of visits, where traditional identification methods are no longer able to ensure the necessary level of security and efficiency in visitor registration. During the work, a thorough analysis of existing solutions was carried out, the best components were selected, both software and hardware parts were developed, and the device itself was assembled. The distinctive features of the developed device are high accuracy and speed of identification, along with the ability to remotely access information about visitors. The results of this research highlight the significant practical value of the development, offering effective solutions for remote data access and visitor registration in various environments.
 
-![Untitled Sketch 2_bb_page-0001](https://github.com/user-attachments/assets/73e1f326-ac60-4e3d-a303-1a11322ef688)
-!
 
-[RP51JiCm44NtFiLSW0sB2aKAwe94wgP4Cb4aTfDaK4rJkx8dGSqTE03B7e0hT5DoBsgJMWAnY_wtvprdbexHSh_h13PiB9IZ6f2f0tHGYXOPQtG4yk2OTZwKWZGhFa15zKepsHTio1VLjSXaSNUxMFWiksRvKo793cHzcWkHfh36htScVVw4BThBaNuw_Q0ld3GL9TpSWqoWCDC9Mnne2n](https://github.com/user-attachments/assets/b17bb23a-abfc-4213-90b6-6445fd7f783e)
+![RP51JiCm44NtFiLSW0sB2aKAwe94wgP4Cb4aTfDaK4rJkx8dGSqTE03B7e0hT5DoBsgJMWAnY_wtvprdbexHSh_h13PiB9IZ6f2f0tHGYXOPQtG4yk2OTZwKWZGhFa15zKepsHTio1VLjSXaSNUxMFWiksRvKo793cHzcWkHfh36htScVVw4BThBaNuw_Q0ld3GL9TpSWqoWCDC9Mnne2n](https://github.com/user-attachments/assets/3fe86f01-b4bf-44d8-831d-a490bbfbc968)
+
+
+![Untitled Sketch 2_bb_page-0001](https://github.com/user-attachments/assets/97e45c1e-c824-4894-b686-b73dab4f7517)
 
 
 ![Снимок экрана 2024-01-23 174548](https://github.com/user-attachments/assets/844065c3-8f7a-4cde-af54-9c9bb5730d69)
