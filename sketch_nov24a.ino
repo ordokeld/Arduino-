@@ -22,7 +22,7 @@ NTPClient timeClient(ntpUDP);                   // Vytvoření instance NTP klie
 
 LiquidCrystal_I2C lcd(0x27, 16, 2);             // Inicializace LCD displeje s I2C adresou 0x27
 
-const char* ftp_server = "192.168.0.31"; // Your computer's IP address
+const char* ftp_server = "193.167.35.1"; // Your computer's IP address
 const char* ftp_username = "esp8266"; // FTP server username
 const char* ftp_password = "123"; // FTP server password
 const int ftp_port = 21; // FTP server port, usually 21 if not changed
